@@ -1,0 +1,231 @@
+name: Build and Package Electron Shiny App
+
+on:
+  push:
+    tags:
+      - 'v*'      # Triggers on tags starting with 'v', e.g., 'v1.0.0' 
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # - os: macos-latest
+          #   node-version: '20'
+          #   arch: x64
+          #   build-script: build:mac-x64
+          #   artifact-name: BIGApp-mac-x64
+          # - os: macos-14
+          #   node-version: '20'
+          #   arch: arm64
+          #   build-script: build:mac-arm64
+          #   artifact-name: EA-mac-arm64
+          - os: windows-latest
+            node-version: '20'
+            arch: x64
+            build-script: build:win
+            artifact-name: Shiny-windows
+    steps:
+      # Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Set up Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # Cache Node.js dependencies
+      - name: Cache Node.js dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+
+      # Install Node.js dependencies
+      - name: Install Node.js dependencies
+        run: npm ci
+        working-directory: .
+
+      # Set up R 4.3.3
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.2'
+
+      # # Install Rtools42
+      # - name: Install Rtools42
+      #   if: runner.os == 'Windows'
+      #   shell: pwsh
+      #   run: |
+      #     Invoke-WebRequest -Uri https://cran.r-project.org/bin/windows/Rtools/rtools42/rtools42.exe -OutFile rtools42.exe
+      #     Start-Process -FilePath .\rtools42.exe -ArgumentList "/SILENT" -Wait
+      #     # Add Rtools to the PATH for the current session
+      #     $env:PATH = "C:\rtools42\usr\bin;$env:PATH"
+      #     # Verify installation
+      #     gcc --version
+      #     gfortran --version
+
+      # - name: Install gfortran from CRAN (Intel macOS)
+      #   if: runner.os == 'macOS' && matrix.arch == 'x64'
+      #   run: |
+      #     curl -LO https://mac.r-project.org/tools/gfortran-12.2-universal.pkg 
+      #     sudo installer -pkg gfortran-12.2-universal.pkg  -target /
+      #     which gfortran
+      #     gfortran --version
+
+      # Install gfortran from CRAN on macOS (Apple Silicon)
+      - name: Install gfortran from CRAN (Apple Silicon)
+        if: runner.os == 'macOS' && matrix.arch == 'arm64'
+        run: |
+          curl -LO https://mac.r-project.org/tools/gfortran-12.2-universal.pkg 
+          sudo installer -pkg gfortran-12.2-universal.pkg  -target /
+          which gfortran
+          gfortran --version
+
+      # # Install R packages
+      # - name: Install R packages
+      #   env:
+      #     GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      #     RENV_CONFIG_AUTO_ACTIVATE: FALSE
+      #   run: |
+      #     Rscript -e 'install.packages("remotes", repos = "https://cran.rstudio.com")'
+      #     Rscript -e 'remotes::install_local(".", dependencies=TRUE)'
+      #     # Rscript -e 'remotes::install_github("jendelman/GWASpoly")'
+      #     # Rscript -e 'remotes::install_github("Breeding-Insight/BIGr")'
+      #     # Rscript -e 'install.packages(c("golem", "httpuv", "shiny", "vcfR", "adegenet", "DT", "dplyr", "bs4Dash", "ggplot2", "purrr", "scales", "shinyWidgets", "shinydisconnect", "shinyalert", "shinyjs", "stringr", "tidyr", "updog", "AGHmatrix", "factoextra", "future", "shinycssloaders", "RColorBrewer", "tibble", "plotly", "rrBLUP", "MASS", "config", "Matrix", "matrixcalc", "markdown"), repos = "https://cran.rstudio.com")'
+
+
+      #  # Verify R Installation on Windows (Optional)
+      # - name: Verify R Installation (Windows)
+      #   if: runner.os == 'Windows'
+      #   shell: pwsh
+      #   run: |
+      #     # Check R version
+      #     Rscript --vanilla -e "R.version.string"
+      #     # Verify R_HOME
+      #     $R_HOME = Rscript --vanilla -e "cat(R.home())"
+      #     Write-Output "R_HOME is $R_HOME"
+      #     # List R_HOME contents
+      #     Get-ChildItem -Path $R_HOME | Sort-Object Name | Select-Object Name
+
+      # Copy R into app directory (for macOS)
+      - name: Copy R into app directory (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p R
+          cp -R "$(Rscript --vanilla -e "cat(R.home())")/." R/
+
+      # Copy R into app directory (for Windows)
+      - name: Copy R into app directory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Create the target directory
+          mkdir -Path R -Force
+          # Retrieve R_HOME using Rscript with --vanilla to prevent renv activation
+          $R_HOME = Rscript --vanilla -e "cat(R.home())"
+          # Output R_HOME for debugging
+          Write-Output "R_HOME is $R_HOME"
+          # Check if R_HOME directory exists
+          if (Test-Path $R_HOME) {
+            Write-Output "R_HOME directory exists."
+          } else {
+            Write-Error "R_HOME directory does not exist at $R_HOME"
+            exit 1
+          }
+          # List contents of R_HOME for verification
+          Get-ChildItem -Path $R_HOME -Recurse | Sort-Object FullName | Select-Object FullName
+          # Copy R files to the app directory using Copy-Item
+          Copy-Item -Path "$R_HOME\*" -Destination "R\" -Recurse -Force
+
+
+      - name: Install R packages into Bundled R (macOS)
+        if: runner.os == 'macOS'
+        env:
+          RENV_CONFIG_AUTO_ACTIVATE: FALSE
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          R_LIBS_USER="$(pwd)/R/library"
+          mkdir -p "$R_LIBS_USER"
+          # Install 'remotes' package into bundled R
+          R/bin/Rscript --vanilla -e "install.packages('remotes', repos='https://cran.rstudio.com', lib='$R_LIBS_USER')"
+          # Install 'BIGapp' package into bundled R
+          #R/bin/Rscript --vanilla -e ".libPaths('$R_LIBS_USER'); remotes::install_local('BIGapp', dependencies=TRUE, lib='$R_LIBS_USER')"
+          R/bin/Rscript --vanilla -e "remotes::install_github('Breeding-Insight/BIGapp', ref='${TAG_NAME}', dependencies=TRUE, lib='$R_LIBS_USER')"
+
+      # Install R packages into Bundled R (Windows)
+      - name: Install R packages into Bundled R (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RENV_CONFIG_AUTO_ACTIVATE: FALSE
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}  # Use the GitHub Actions token
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # Set the R library path to your bundled R library
+          $R_LIBS_USER = "$(Resolve-Path .)\R\library"
+          # Replace backslashes with forward slashes
+          $R_LIBS_USER = $R_LIBS_USER -replace '\\','/'
+
+          if (-Not (Test-Path $R_LIBS_USER)) {
+            mkdir -Path $R_LIBS_USER -Force
+          }
+
+          # Set CRAN repository to use binaries when possible
+          R\bin\Rscript.exe --vanilla -e "options(repos = c(CRAN = 'https://cran.rstudio.com'))"
+
+          # Set options to prefer binary packages
+          R\bin\Rscript.exe --vanilla -e "options(pkgType = 'binary')"
+
+          # Install 'remotes' package into bundled R
+          R\bin\Rscript.exe --vanilla -e "install.packages('remotes', repos='https://cran.rstudio.com', lib='$R_LIBS_USER')"
+
+          # Install dependencies first
+          R\bin\Rscript.exe --vanilla -e "remotes::install_deps(dependencies=TRUE, lib='$R_LIBS_USER')"
+
+          # Install 'BIGapp' package from GitHub using the provided token
+          R\bin\Rscript.exe --vanilla -e "remotes::install_github('breeding-insight/BIGapp', ref='v1.0.0', lib='$R_LIBS_USER')"
+
+      # Verify BIGapp Installation
+      - name: Verify BIGapp Installation (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          R\bin\Rscript.exe --vanilla -e "library(BIGapp)"
+
+      # - name: List R directory contents
+      #   run: |
+      #     ls -R R
+
+      # Build the Electron app
+      - name: Build Electron App
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run ${{ matrix.build-script }}
+        working-directory: .
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: "dist/*.exe"
+          draft: false
+          prerelease: false
+
+
+
+      # # Upload the built application
+      # - name: Upload Artifact
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: ${{ matrix.artifact-name }}
+      #     path: dist/*
