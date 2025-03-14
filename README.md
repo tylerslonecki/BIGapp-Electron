@@ -1,6 +1,6 @@
 # BIGapp
 
-A minimal golem-based Shiny app packaged with Electron.
+BIGapp Shiny app packaged with Electron.
 
 ## Project Structure
 
